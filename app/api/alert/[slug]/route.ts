@@ -1,34 +1,65 @@
-// @ts-nocheck
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
-import { Resend } from "resend";
 
-export async function POST(req: Request, { params }:{ params:{ slug:string }}) {
-  const supabase = getSupabaseAdmin();
-  const { data } = await supabase
-    .from("tags")
-    .select("id, slug, status, pet:pets(name, owner:owners(name, email, phone_e164))")
-    .eq("slug", params.slug).single();
-  if (!data) return NextResponse.json({ ok:false }, { status:404 });
+/**
+ * Body: { code:string, owner?:{phone_e164?:string,email?:string}, pet?:{id:string, public_note?:string, photo_url?:string} }
+ */
+export async function POST(req: Request) {
+  const body = await req.json();
+  const { code, owner, pet } = body;
 
-  const body = await req.json().catch(()=> ({}));
-  const when = new Date().toLocaleString("it-IT");
-
-  const email = data.pet?.owner?.email;
-  if (email && process.env.RESEND_API_KEY) {
-    const resend = new Resend(process.env.RESEND_API_KEY);
-    const gps = body?.precise ? `GPS: lat ${body.precise.lat}, lng ${body.precise.lng}` : "";
-    const approx = body?.approx ? `Area: ${body.approx.city ?? ""} ${body.approx.country ?? ""}` : "";
-    await resend.emails.send({
-      from: "CoccolaTag <alerts@coccolatag.com>",
-      to: email,
-      subject: `Scansione CoccolaTag: ${data.pet?.name} (${data.status})`,
-      html: `<p>Ciao ${data.pet?.owner?.name},</p>
-             <p>Qualcuno ha scansionato la medaglietta di <b>${data.pet?.name}</b> alle ${when}.</p>
-             <p>${gps || approx || "Nessuna posizione precisa condivisa."}</p>`
-    });
-    await supabase.from("notifications_log").insert({ tag_id: data.id, channel: 'email', payload: { when, ...body } });
+  if (!code) {
+    return NextResponse.json({ ok: false, error: "missing_code" }, { status: 400 });
   }
+
+  const supabase = getSupabaseAdmin();
+
+  // verifica codice
+  const { data: oc, error: e1 } = await supabase
+    .from("owner_codes")
+    .select("owner_id")
+    .eq("code", code)
+    .single();
+
+  if (e1 || !oc) {
+    return NextResponse.json({ ok: false, error: "bad_code" }, { status: 401 });
+  }
+
+  const ownerId = oc.owner_id;
+
+  // update proprietario
+  if (owner) {
+    const { error } = await supabase
+      .from("owners")
+      .update({
+        phone_e164: owner.phone_e164 ?? null,
+        email: owner.email ?? null,
+      })
+      .eq("id", ownerId);
+
+    if (error) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    }
+  }
+
+  // update pet
+  if (pet) {
+    const { error } = await supabase
+      .from("pets")
+      .update({
+        public_note: pet.public_note ?? null,
+        photo_url: pet.photo_url ?? null,
+      })
+      .eq("id", pet.id)
+      .eq("owner_id", ownerId);
+
+    if (error) {
+      return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    }
+  }
+
+  return NextResponse.json({ ok: true });
+}
 
   const whatsapp = data.pet?.owner?.phone_e164
     ? `https://wa.me/${data.pet.owner.phone_e164.replace('+','')}?text=${encodeURIComponent("Ho trovato " + data.pet.name)}`
