@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { --mint:#41bdc6; --lavender:#9d84af; }
+body { @apply bg-white text-gray-900; }
+.btn { @apply rounded-xl p-3 text-center font-semibold; }
+.btn-mint { @apply text-white; background-color: var(--mint); }
+.btn-outline { @apply border; }
+.card { @apply rounded-2xl border p-4; }
+.badge { @apply inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium; }

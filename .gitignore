@@ -1,0 +1,15 @@
+# build & deps
+node_modules/
+.next/
+.out/
+dist/
+turbo/
+.cache/
+
+# env & local
+.env*
+!.env.example
+.vercel/
+npm-debug.log*
+yarn-error.log*
+.DS_Store
