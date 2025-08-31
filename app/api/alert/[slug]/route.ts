@@ -1,64 +1,60 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { Resend } from "resend";
 
-/**
- * Body: { code:string, owner?:{phone_e164?:string,email?:string}, pet?:{id:string, public_note?:string, photo_url?:string} }
- */
-export async function POST(req: Request) {
+export async function POST(req: Request, { params }: { params: { slug: string } }) {
   const body = await req.json();
-  const { code, owner, pet } = body;
-
-  if (!code) {
-    return NextResponse.json({ ok: false, error: "missing_code" }, { status: 400 });
-  }
+  const { precise, lat, lon, note } = body;
 
   const supabase = getSupabaseAdmin();
 
-  // verifica codice
-  const { data: oc, error: e1 } = await supabase
-    .from("owner_codes")
-    .select("owner_id")
-    .eq("code", code)
+  // recupera dati pet + proprietario
+  const { data, error } = await supabase
+    .from("v_pet_public")
+    .select("id, name, owner:owners(email, phone_e164)")
+    .eq("slug", params.slug)
     .single();
 
-  if (e1 || !oc) {
-    return NextResponse.json({ ok: false, error: "bad_code" }, { status: 401 });
+  if (error || !data) {
+    return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
   }
 
-  const ownerId = oc.owner_id;
+  const ownerEmail = data.owner?.email;
+  const ownerPhone = data.owner?.phone_e164;
 
-  // update proprietario
-  if (owner) {
-    const { error } = await supabase
-      .from("owners")
-      .update({
-        phone_e164: owner.phone_e164 ?? null,
-        email: owner.email ?? null,
-      })
-      .eq("id", ownerId);
+  // link WhatsApp precompilato
+  const whatsappDeepLink = ownerPhone
+    ? `https://wa.me/${ownerPhone.replace("+", "")}?text=Ho%20trovato%20${encodeURIComponent(data.name)}`
+    : null;
 
-    if (error) {
-      return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
-    }
+  // log in scansioni
+  await supabase.from("scan_events").insert({
+    pet_id: data.id,
+    note,
+    lat,
+    lon,
+  });
+
+  // invio email via Resend (se configurato)
+  if (ownerEmail && process.env.RESEND_API_KEY) {
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    await resend.emails.send({
+      from: "alerts@coccolatag.com",
+      to: ownerEmail,
+      subject: `Avvistamento di ${data.name}`,
+      html: `
+        <p>Ciao,</p>
+        <p>Qualcuno ha segnalato <b>${data.name}</b>.</p>
+        ${precise && lat && lon ? `<p>Posizione: ${lat}, ${lon}</p>` : ""}
+        ${note ? `<p>Nota: ${note}</p>` : ""}
+      `,
+    });
   }
 
-  // update pet
-  if (pet) {
-    const { error } = await supabase
-      .from("pets")
-      .update({
-        public_note: pet.public_note ?? null,
-        photo_url: pet.photo_url ?? null,
-      })
-      .eq("id", pet.id)
-      .eq("owner_id", ownerId);
-
-    if (error) {
-      return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
-    }
-  }
-
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({
+    ok: true,
+    whatsappDeepLink,
+  });
 }
 
   const whatsapp = data.pet?.owner?.phone_e164
